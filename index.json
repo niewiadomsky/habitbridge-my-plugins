@@ -1,0 +1,9 @@
+{
+    "plugins": [
+        {
+            "id": "morning-wakeup",
+            "name": "Morning Wakeup",
+            "description": "Just scanning the QR Code in the specified time will give you a reward."
+        }
+    ]
+}
