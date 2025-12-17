@@ -1,1 +1,15 @@
 <h1>Plugins for HabitBridge</h1>
+<ul id="plugins-list"></ul>
+
+<script>
+    fetch('index.json')
+    .then(response => response.json())
+    .then(data => {
+        console.log(data);
+        data.plugins.forEach(plugin => {
+            const li = document.createElement('li');
+            li.textContent = plugin.name;
+            pluginsList.appendChild(li);
+        });
+    });
+</script>
