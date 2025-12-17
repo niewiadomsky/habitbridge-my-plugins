@@ -5,6 +5,7 @@
     fetch('index.json')
     .then(response => response.json())
     .then(data => {
+        const pluginsList = document.getElementById('plugins-list');
         console.log(data);
         data.plugins.forEach(plugin => {
             const li = document.createElement('li');
