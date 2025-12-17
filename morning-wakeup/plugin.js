@@ -61,6 +61,24 @@ app.init(() => {
     }
   }
 
+  // Check if camera is available
+  async function checkCameraSupport() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return { supported: false, message: '❌ Camera API not supported on this device' };
+    }
+    
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const hasCamera = devices.some(device => device.kind === 'videoinput');
+      if (!hasCamera) {
+        return { supported: false, message: '❌ No camera found on this device' };
+      }
+      return { supported: true };
+    } catch (error) {
+      return { supported: false, message: '❌ Unable to access camera devices' };
+    }
+  }
+
   // Start camera and QR scanning
   window.startScanning = async () => {
     const video = document.getElementById('qr-video');
@@ -70,19 +88,56 @@ app.init(() => {
     const stopBtn = document.getElementById('stop-btn');
     const scanResult = document.getElementById('scan-result');
 
+    // Clear previous messages
+    scanResult.textContent = '📷 Starting camera...';
+    scanResult.className = '';
+
+    // Check camera support first
+    const cameraCheck = await checkCameraSupport();
+    if (!cameraCheck.supported) {
+      scanResult.textContent = cameraCheck.message;
+      scanResult.className = 'result-error';
+      return;
+    }
+
     try {
+      // iOS-compatible video constraints
+      const constraints = {
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      };
+
       // Request camera access
-      videoStream = await navigator.mediaDevices.getUserMedia({ 
-        video: { facingMode: 'environment' } 
-      });
+      videoStream = await navigator.mediaDevices.getUserMedia(constraints);
       
       video.srcObject = videoStream;
       video.setAttribute('playsinline', true);
-      video.play();
+      video.setAttribute('webkit-playsinline', true);
+      video.setAttribute('muted', true);
+      video.muted = true;
+
+      // Wait for video to be ready
+      await new Promise((resolve, reject) => {
+        video.onloadedmetadata = () => {
+          video.play()
+            .then(resolve)
+            .catch(reject);
+        };
+        video.onerror = reject;
+        
+        // Timeout after 5 seconds
+        setTimeout(() => reject(new Error('Video loading timeout')), 5000);
+      });
 
       startBtn.style.display = 'none';
       stopBtn.style.display = 'inline-block';
       video.style.display = 'block';
+      scanResult.textContent = '📷 Camera active - Point at QR code';
+      scanResult.className = '';
 
       // Start scanning loop
       scanningInterval = setInterval(() => {
@@ -101,9 +156,64 @@ app.init(() => {
       }, 300);
 
     } catch (error) {
-      scanResult.textContent = '❌ Camera access denied or unavailable';
-      scanResult.className = 'result-error';
       console.error('Camera error:', error);
+      
+      let errorMessage = '❌ Camera access error';
+      
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        errorMessage = '❌ Camera permission denied. Please allow camera access in your device settings.';
+      } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+        errorMessage = '❌ No camera found on this device';
+      } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+        errorMessage = '❌ Camera is already in use by another application';
+      } else if (error.name === 'OverconstrainedError') {
+        errorMessage = '❌ Camera constraints not supported. Trying with default camera...';
+        
+        // Retry with simpler constraints
+        try {
+          videoStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          video.srcObject = videoStream;
+          video.setAttribute('playsinline', true);
+          video.setAttribute('webkit-playsinline', true);
+          video.muted = true;
+          await video.play();
+          
+          startBtn.style.display = 'none';
+          stopBtn.style.display = 'inline-block';
+          video.style.display = 'block';
+          scanResult.textContent = '📷 Camera active - Point at QR code';
+          scanResult.className = '';
+          
+          scanningInterval = setInterval(() => {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              context.drawImage(video, 0, 0, canvas.width, canvas.height);
+              const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+              const code = jsQR(imageData.data, imageData.width, imageData.height);
+              if (code) {
+                handleQRCodeScanned(code.data);
+              }
+            }
+          }, 300);
+          return;
+        } catch (retryError) {
+          errorMessage = '❌ Unable to access camera';
+        }
+      } else if (error.name === 'SecurityError') {
+        errorMessage = '❌ Camera access blocked. Ensure you\'re using HTTPS.';
+      } else if (error.message && error.message.includes('timeout')) {
+        errorMessage = '❌ Camera loading timeout. Please try again.';
+      }
+      
+      scanResult.textContent = errorMessage;
+      scanResult.className = 'result-error';
+      
+      // Clean up on error
+      if (videoStream) {
+        videoStream.getTracks().forEach(track => track.stop());
+        videoStream = null;
+      }
     }
   };
 
@@ -168,7 +278,7 @@ app.init(() => {
       </div>
 
       <div class="scanner-container">
-        <video id="qr-video" playsinline></video>
+        <video id="qr-video" playsinline webkit-playsinline muted autoplay></video>
         <canvas id="qr-canvas" style="display: none;"></canvas>
         
         <div class="controls">
@@ -188,9 +298,13 @@ app.init(() => {
         <ol>
           <li>Make sure it's between ${formatTimeWindow(MORNING_START_HOUR, MORNING_START_MINUTE)} and ${formatTimeWindow(MORNING_END_HOUR, MORNING_END_MINUTE)}</li>
           <li>Click "Start Camera" to activate the scanner</li>
+          <li>Allow camera access when prompted (required)</li>
           <li>Point your camera at your morning QR code</li>
           <li>The habit will be marked complete automatically!</li>
         </ol>
+        <div class="ios-note">
+          <strong>📱 iOS Users:</strong> If camera doesn't work, check Settings → Safari/Browser → Camera and ensure it's allowed for this site.
+        </div>
       </div>
     </div>
 
@@ -349,6 +463,15 @@ app.init(() => {
       .instructions li {
         margin: 8px 0;
         line-height: 1.6;
+      }
+
+      .ios-note {
+        margin-top: 15px;
+        padding: 12px;
+        background: rgba(255, 193, 7, 0.2);
+        border-radius: 8px;
+        font-size: 14px;
+        color: #856404;
       }
     </style>
 
